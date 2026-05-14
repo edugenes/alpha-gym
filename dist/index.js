@@ -55,11 +55,19 @@ app.use("/api/student", studentRouter);
 app.use("/api/notifications", notificationsRouter);
 // Serve frontend estático (pasta public/ gerada pelo build do React)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const publicDir = path.join(__dirname, "..", "public");
-if (fs.existsSync(publicDir)) {
-    app.use(express.static(publicDir));
+const candidates = [
+    path.join(__dirname, "..", "public"),
+    path.join(process.cwd(), "public"),
+];
+const publicDir = candidates.find((p) => fs.existsSync(p)) ?? null;
+console.log("publicDir candidates:", candidates);
+console.log("publicDir found:", publicDir);
+if (publicDir) {
+    app.use(express.static(publicDir, { index: "index.html" }));
     // Fallback SPA: qualquer rota que não seja /api retorna index.html
-    app.get(/^(?!\/api).*$/, (_req, res) => {
+    app.get("*", (_req, res, next) => {
+        if (_req.path.startsWith("/api"))
+            return next();
         res.sendFile(path.join(publicDir, "index.html"));
     });
 }
