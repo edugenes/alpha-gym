@@ -4,6 +4,9 @@ import cors from "cors";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import bcrypt from "bcryptjs";
+import { getDb } from "./db/client.js";
+import { ensureUsersTable } from "./db/schema.js";
 import { authRouter } from "./routes/auth.js";
 import { healthRouter } from "./routes/health.js";
 import { studentsRouter } from "./routes/students.js";
@@ -65,6 +68,28 @@ if (fs.existsSync(publicDir)) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`Alpha GYM API rodando em http://localhost:${PORT}`);
+async function ensureAdminUser() {
+  try {
+    await ensureUsersTable();
+    const db = getDb();
+    const existing = await db.query("SELECT id FROM users LIMIT 1");
+    if (existing.rows.length === 0) {
+      const email = process.env.ADMIN_EMAIL ?? "admin";
+      const password = process.env.ADMIN_PASSWORD ?? "admin";
+      const hash = await bcrypt.hash(password, 10);
+      await db.query(
+        "INSERT INTO users (email, password_hash, name, role) VALUES ($1, $2, $3, $4)",
+        [email.toLowerCase(), hash, "Administrador", "administrador"]
+      );
+      console.log("Usuário admin criado:", email);
+    }
+  } catch (e) {
+    console.error("Erro ao criar admin:", e);
+  }
+}
+
+ensureAdminUser().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Alpha GYM API rodando em http://localhost:${PORT}`);
+  });
 });
