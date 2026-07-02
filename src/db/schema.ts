@@ -40,7 +40,7 @@ export async function ensureStudentsTable(): Promise<void> {
     )
   `);
   // Migrações pontuais para bancos existentes
-  for (const col of ["password_hash", "biometric_device_ref"]) {
+  for (const col of ["password_hash", "biometric_device_ref", "sex", "gender"]) {
     try { await run(`ALTER TABLE students ADD COLUMN ${col} TEXT`); } catch { /* já existe */ }
   }
 }
@@ -97,16 +97,74 @@ export async function ensureAssessmentsTable(): Promise<void> {
     CREATE TABLE IF NOT EXISTS assessments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      evaluator_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
       assessment_date TEXT NOT NULL,
-      weight REAL NOT NULL CHECK (weight >= 0),
-      height REAL NOT NULL CHECK (height >= 0),
-      imc REAL,
-      fat_percent REAL,
-      lean_mass REAL,
-      measures TEXT,
-      photo_before_url TEXT,
-      photo_after_url TEXT,
+      weight_kg REAL,
+      height_cm REAL,
+      bmi REAL,
+      protocol TEXT,
+      body_fat_percent REAL,
+      body_density REAL,
+      lean_mass_kg REAL,
+      goal TEXT,
       notes TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+  // Migração graceful: adicionar novas colunas se a tabela antiga já existir
+  const newCols: [string, string][] = [
+    ["evaluator_id", "INTEGER"],
+    ["weight_kg", "REAL"],
+    ["height_cm", "REAL"],
+    ["bmi", "REAL"],
+    ["protocol", "TEXT"],
+    ["body_fat_percent", "REAL"],
+    ["body_density", "REAL"],
+    ["lean_mass_kg", "REAL"],
+    ["goal", "TEXT"],
+  ];
+  for (const [col, type] of newCols) {
+    try { await run(`ALTER TABLE assessments ADD COLUMN ${col} ${type}`); } catch { /* já existe */ }
+  }
+  // Migrar dados antigos (weight → weight_kg, height → height_cm, fat_percent → body_fat_percent)
+  try {
+    await run(`UPDATE assessments SET weight_kg = CAST(weight AS REAL) WHERE weight_kg IS NULL AND weight IS NOT NULL`);
+    await run(`UPDATE assessments SET height_cm = CAST(height AS REAL) WHERE height_cm IS NULL AND height IS NOT NULL`);
+    await run(`UPDATE assessments SET body_fat_percent = CAST(fat_percent AS REAL) WHERE body_fat_percent IS NULL AND fat_percent IS NOT NULL`);
+  } catch { /* colunas antigas podem não existir */ }
+}
+
+export async function ensureAssessmentMeasurementsTable(): Promise<void> {
+  await run(`
+    CREATE TABLE IF NOT EXISTS assessment_measurements (
+      assessment_id INTEGER PRIMARY KEY REFERENCES assessments(id) ON DELETE CASCADE,
+      neck REAL, shoulder REAL, chest REAL, waist REAL, abdomen REAL, hip REAL,
+      arm_relaxed_right REAL, arm_relaxed_left REAL,
+      arm_flexed_right REAL, arm_flexed_left REAL,
+      forearm_right REAL, forearm_left REAL,
+      thigh_right REAL, thigh_left REAL,
+      calf_right REAL, calf_left REAL
+    )
+  `);
+}
+
+export async function ensureAssessmentSkinsfoldsTable(): Promise<void> {
+  await run(`
+    CREATE TABLE IF NOT EXISTS assessment_skinfolds (
+      assessment_id INTEGER PRIMARY KEY REFERENCES assessments(id) ON DELETE CASCADE,
+      triceps REAL, subscapular REAL, chest REAL, midaxillary REAL,
+      suprailiac REAL, abdominal REAL, thigh REAL
+    )
+  `);
+}
+
+export async function ensureAssessmentPhotosTable(): Promise<void> {
+  await run(`
+    CREATE TABLE IF NOT EXISTS assessment_photos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      assessment_id INTEGER NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+      angle TEXT CHECK (angle IN ('frente', 'costas', 'lateral_direita', 'lateral_esquerda')),
+      url TEXT NOT NULL,
       created_at TEXT DEFAULT (datetime('now'))
     )
   `);
