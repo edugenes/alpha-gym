@@ -1,4 +1,5 @@
 import { Router } from "express";
+import PDFDocument from "pdfkit";
 import { getDb } from "../db/client.js";
 import {
   ensureExercisesTable,
@@ -238,6 +239,181 @@ workoutsRouter.post("/students/:studentId/templates/:templateId", async (req, re
   } catch (e) {
     console.error("Assign workout error:", e);
     res.status(500).json({ error: "Erro ao associar ficha ao aluno." });
+  }
+});
+
+/** GET /api/workouts/templates/:id/print?student_id=X
+ * Gera PDF da ficha de treino. student_id é opcional (personaliza cabeçalho com nome do aluno).
+ */
+workoutsRouter.get("/templates/:id/print", async (req, res) => {
+  try {
+    const templateId = parseInt(req.params.id, 10);
+    if (Number.isNaN(templateId)) return res.status(400).json({ error: "ID inválido." });
+
+    await ensureWorkoutTemplatesTable();
+    await ensureWorkoutTemplateItemsTable();
+    await ensureExercisesTable();
+    const db = getDb();
+
+    const tplResult = await db.query("SELECT * FROM workout_templates WHERE id = $1", [templateId]);
+    if (tplResult.rows.length === 0) return res.status(404).json({ error: "Ficha não encontrada." });
+    const tpl = tplResult.rows[0] as TemplateRow;
+
+    const items = await db.query(
+      `SELECT i.id, i.sets, i.reps, i.sort_order, e.name as exercise_name, e.muscle_group
+       FROM workout_template_items i JOIN exercises e ON e.id = i.exercise_id
+       WHERE i.template_id = $1 ORDER BY i.sort_order, i.id`,
+      [templateId]
+    );
+
+    let studentName: string | null = null;
+    const studentIdParam = req.query.student_id;
+    if (studentIdParam) {
+      const sid = parseInt(String(studentIdParam), 10);
+      if (!Number.isNaN(sid)) {
+        const sResult = await db.query("SELECT name FROM students WHERE id = $1", [sid]);
+        if (sResult.rows.length > 0) studentName = (sResult.rows[0] as { name: string }).name;
+      }
+    }
+
+    interface PrintItemRow { sets: string | null; reps: string | null; sort_order: number; exercise_name: string; muscle_group: string }
+    const rows = items.rows as PrintItemRow[];
+
+    const doc = new PDFDocument({ margin: 48, size: "A4" });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="ficha-treino-${templateId}.pdf"`
+    );
+    doc.pipe(res);
+
+    // ── Cabeçalho ──────────────────────────────────────────────────────────
+    doc
+      .fontSize(20)
+      .font("Helvetica-Bold")
+      .text("Alpha GYM", { align: "center" });
+    doc
+      .fontSize(10)
+      .font("Helvetica")
+      .fillColor("#888888")
+      .text("Sistema de Gestão de Academia", { align: "center" });
+
+    doc.moveDown(0.5);
+    doc
+      .moveTo(48, doc.y)
+      .lineTo(doc.page.width - 48, doc.y)
+      .strokeColor("#f97316")
+      .lineWidth(2)
+      .stroke();
+    doc.moveDown(0.8);
+
+    // ── Dados da ficha ──────────────────────────────────────────────────────
+    doc.fillColor("#000000").fontSize(15).font("Helvetica-Bold").text(`Ficha: ${tpl.name}`);
+    if (studentName) {
+      doc.fontSize(11).font("Helvetica").fillColor("#444444").text(`Aluno: ${studentName}`);
+    }
+    doc
+      .fontSize(10)
+      .font("Helvetica")
+      .fillColor("#888888")
+      .text(`Gerado em: ${new Date().toLocaleDateString("pt-BR")}`);
+    doc.moveDown(1);
+
+    // ── Tabela de exercícios ─────────────────────────────────────────────────
+    const tableLeft = 48;
+    const colWidths = [220, 100, 55, 55, 74]; // exercício, grupo, séries, reps, descanso
+    const headers = ["Exercício", "Grupo muscular", "Séries", "Repetições", "Descanso"];
+    const rowHeight = 24;
+    const tableWidth = colWidths.reduce((a, b) => a + b, 0);
+
+    // Cabeçalho da tabela
+    doc.rect(tableLeft, doc.y, tableWidth, rowHeight).fill("#f97316");
+    const headerY = doc.y + 7;
+    let cx = tableLeft + 6;
+    headers.forEach((h, i) => {
+      doc.fontSize(9).font("Helvetica-Bold").fillColor("#ffffff").text(h, cx, headerY, { width: colWidths[i] - 8, ellipsis: true });
+      cx += colWidths[i];
+    });
+    doc.y += rowHeight;
+
+    // Linhas de exercícios
+    let odd = false;
+    for (const row of rows) {
+      const rowY = doc.y;
+      const bg = odd ? "#f9fafb" : "#ffffff";
+      doc.rect(tableLeft, rowY, tableWidth, rowHeight).fill(bg);
+      doc
+        .moveTo(tableLeft, rowY + rowHeight)
+        .lineTo(tableLeft + tableWidth, rowY + rowHeight)
+        .strokeColor("#e5e7eb")
+        .lineWidth(0.5)
+        .stroke();
+
+      let x = tableLeft + 6;
+      const cellY = rowY + 7;
+      const cells = [
+        row.exercise_name,
+        row.muscle_group,
+        row.sets ?? "—",
+        row.reps ?? "—",
+        "—",
+      ];
+      cells.forEach((val, i) => {
+        doc
+          .fontSize(9)
+          .font("Helvetica")
+          .fillColor("#111111")
+          .text(String(val), x, cellY, { width: colWidths[i] - 8, ellipsis: true });
+        x += colWidths[i];
+      });
+      doc.y += rowHeight;
+      odd = !odd;
+
+      // Quebra de página se necessário
+      if (doc.y > doc.page.height - 100) {
+        doc.addPage();
+      }
+    }
+
+    doc.moveDown(1.5);
+
+    // ── Rodapé / assinatura ──────────────────────────────────────────────────
+    doc
+      .moveTo(48, doc.y)
+      .lineTo(doc.page.width - 48, doc.y)
+      .strokeColor("#e5e7eb")
+      .lineWidth(1)
+      .stroke();
+    doc.moveDown(0.8);
+
+    const sigY = doc.y;
+    const sigLineW = 180;
+    doc
+      .moveTo(48, sigY + 30)
+      .lineTo(48 + sigLineW, sigY + 30)
+      .strokeColor("#000000")
+      .lineWidth(0.8)
+      .stroke();
+    doc
+      .fontSize(8)
+      .font("Helvetica")
+      .fillColor("#555555")
+      .text("Assinatura do professor", 48, sigY + 34, { width: sigLineW, align: "center" });
+
+    doc
+      .moveTo(doc.page.width - 48 - sigLineW, sigY + 30)
+      .lineTo(doc.page.width - 48, sigY + 30)
+      .stroke();
+    doc
+      .fontSize(8)
+      .fillColor("#555555")
+      .text("Assinatura do aluno", doc.page.width - 48 - sigLineW, sigY + 34, { width: sigLineW, align: "center" });
+
+    doc.end();
+  } catch (e) {
+    console.error("Print workout error:", e);
+    if (!res.headersSent) res.status(500).json({ error: "Erro ao gerar PDF da ficha." });
   }
 });
 

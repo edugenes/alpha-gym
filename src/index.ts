@@ -22,6 +22,7 @@ import { checkInsRouter } from "./routes/checkIns.js";
 import { studentAuthRouter } from "./routes/studentAuth.js";
 import { studentRouter } from "./routes/student.js";
 import { notificationsRouter } from "./routes/notifications.js";
+import { devicesRouter } from "./routes/devices.js";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
@@ -56,6 +57,7 @@ app.use("/api/check-ins", checkInsRouter);
 app.use("/api/student-auth", studentAuthRouter);
 app.use("/api/student", studentRouter);
 app.use("/api/notifications", notificationsRouter);
+app.use("/api/devices", devicesRouter);
 
 // Serve frontend estático (pasta public/ gerada pelo build do React)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

@@ -34,16 +34,17 @@ export async function ensureStudentsTable(): Promise<void> {
       plan_name TEXT,
       due_date TEXT,
       password_hash TEXT,
+      biometric_device_ref TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     )
   `);
-  try {
-    await run(`ALTER TABLE students ADD COLUMN password_hash TEXT`);
-  } catch {
-    // coluna já existe
+  // Migrações pontuais para bancos existentes
+  for (const col of ["password_hash", "biometric_device_ref"]) {
+    try { await run(`ALTER TABLE students ADD COLUMN ${col} TEXT`); } catch { /* já existe */ }
   }
 }
+
 
 export async function ensurePlansTable(): Promise<void> {
   await run(`
@@ -177,9 +178,17 @@ export async function ensureCheckInsTable(): Promise<void> {
     CREATE TABLE IF NOT EXISTS check_ins (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+      method TEXT NOT NULL DEFAULT 'manual' CHECK (method IN ('manual', 'totem', 'biometria', 'card')),
       created_at TEXT DEFAULT (datetime('now'))
     )
   `);
+  for (const col of [
+    "device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL",
+    "method TEXT NOT NULL DEFAULT 'manual'"
+  ]) {
+    try { await run(`ALTER TABLE check_ins ADD COLUMN ${col}`); } catch { /* já existe */ }
+  }
 }
 
 export async function ensureWorkoutCompletionsTable(): Promise<void> {
@@ -201,6 +210,21 @@ export async function ensureStudentAttachmentsTable(): Promise<void> {
       type TEXT NOT NULL DEFAULT 'atestado',
       content_url TEXT NOT NULL,
       file_name TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+}
+
+export async function ensureDevicesTable(): Promise<void> {
+  await run(`
+    CREATE TABLE IF NOT EXISTS devices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL CHECK (type IN ('totem', 'catraca', 'leitor_digital')),
+      location TEXT,
+      token TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'ativo' CHECK (status IN ('ativo', 'inativo')),
+      last_seen_at TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     )
   `);
