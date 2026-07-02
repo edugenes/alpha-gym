@@ -13,9 +13,14 @@ export async function ensureUsersTable(): Promise<void> {
       password_hash TEXT NOT NULL,
       name TEXT NOT NULL,
       role TEXT NOT NULL CHECK (role IN ('administrador', 'recepcionista', 'professor')),
+      employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+      active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now'))
     )
   `);
+  for (const col of ["employee_id INTEGER", "active INTEGER NOT NULL DEFAULT 1"]) {
+    try { await run(`ALTER TABLE users ADD COLUMN ${col}`); } catch { /* já existe */ }
+  }
 }
 
 export async function ensureStudentsTable(): Promise<void> {
@@ -68,6 +73,7 @@ export async function ensureEnrollmentsTable(): Promise<void> {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
       plan_id INTEGER NOT NULL REFERENCES plans(id),
+      employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
       start_date TEXT NOT NULL,
       end_date TEXT NOT NULL,
       active INTEGER DEFAULT 1,
@@ -75,6 +81,7 @@ export async function ensureEnrollmentsTable(): Promise<void> {
       updated_at TEXT DEFAULT (datetime('now'))
     )
   `);
+  try { await run(`ALTER TABLE enrollments ADD COLUMN employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL`); } catch { /* já existe */ }
 }
 
 export async function ensureInstallmentsTable(): Promise<void> {
@@ -187,9 +194,11 @@ export async function ensureWorkoutTemplatesTable(): Promise<void> {
     CREATE TABLE IF NOT EXISTS workout_templates (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
+      created_by_employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
       created_at TEXT DEFAULT (datetime('now'))
     )
   `);
+  try { await run(`ALTER TABLE workout_templates ADD COLUMN created_by_employee_id INTEGER`); } catch { /* já existe */ }
 }
 
 export async function ensureWorkoutTemplateItemsTable(): Promise<void> {
@@ -222,11 +231,45 @@ export async function ensureEmployeesTable(): Promise<void> {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       role TEXT NOT NULL,
+      role_type TEXT,
+      custom_role TEXT,
+      cpf TEXT,
+      rg TEXT,
+      birth_date TEXT,
+      phone TEXT,
+      email TEXT,
+      address TEXT,
+      admission_date TEXT,
+      termination_date TEXT,
+      employment_type TEXT,
+      work_schedule TEXT,
       commission_percent REAL,
       monthly_goal REAL,
-      status TEXT NOT NULL DEFAULT 'ativo' CHECK (status IN ('ativo', 'inativo')),
+      status TEXT NOT NULL DEFAULT 'ativo' CHECK (status IN ('ativo', 'ferias', 'afastado', 'desligado', 'inativo')),
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+  const empCols: [string, string][] = [
+    ["role_type", "TEXT"], ["custom_role", "TEXT"], ["cpf", "TEXT"], ["rg", "TEXT"],
+    ["birth_date", "TEXT"], ["phone", "TEXT"], ["email", "TEXT"], ["address", "TEXT"],
+    ["admission_date", "TEXT"], ["termination_date", "TEXT"],
+    ["employment_type", "TEXT"], ["work_schedule", "TEXT"],
+  ];
+  for (const [col, type] of empCols) {
+    try { await run(`ALTER TABLE employees ADD COLUMN ${col} ${type}`); } catch { /* já existe */ }
+  }
+}
+
+export async function ensureEmployeeAttachmentsTable(): Promise<void> {
+  await run(`
+    CREATE TABLE IF NOT EXISTS employee_attachments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+      type TEXT,
+      url TEXT NOT NULL,
+      file_name TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
     )
   `);
 }

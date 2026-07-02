@@ -25,7 +25,7 @@ authRouter.post("/login", async (req, res) => {
     await ensureUsersTable();
     const db = getDb();
     const row = await db.query(
-      "SELECT id, email, name, role, password_hash FROM users WHERE email = $1",
+      "SELECT id, email, name, role, password_hash, active FROM users WHERE email = $1",
       [email.trim().toLowerCase()]
     );
 
@@ -34,7 +34,11 @@ authRouter.post("/login", async (req, res) => {
       return;
     }
 
-    const user = row.rows[0] as { id: number; email: string; name: string; role: Role; password_hash: string };
+    const user = row.rows[0] as { id: number; email: string; name: string; role: Role; password_hash: string; active: number | null };
+    if (user.active === 0) {
+      res.status(403).json({ error: "Acesso desativado. Entre em contato com o administrador." });
+      return;
+    }
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
       res.status(401).json({ error: "Credenciais inválidas." });
