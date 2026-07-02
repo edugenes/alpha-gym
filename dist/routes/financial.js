@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { getDb } from "../db/client.js";
-import { ensureInstallmentsTable, ensureEnrollmentsTable, ensurePlansTable, ensureStudentsTable } from "../db/schema.js";
+import { ensureInstallmentsTable, ensureEnrollmentsTable, ensurePlansTable, ensureStudentsTable, ensurePayrollTable } from "../db/schema.js";
 import { requireAuth } from "../middleware/auth.js";
 export const financialRouter = Router();
 financialRouter.use(requireAuth);
@@ -156,6 +156,11 @@ financialRouter.get("/report", async (req, res) => {
        FROM installments
        WHERE strftime('%m', due_date) = $1 AND strftime('%Y', due_date) = $2`, [mStr, String(y)]);
         const row = summary.rows[0];
+        // Custo da folha de pagamento do mês
+        await ensurePayrollTable();
+        const monthStr = `${String(y)}-${mStr}`;
+        const payrollRes = await db.query("SELECT COALESCE(SUM(total), 0) as payroll_cost FROM payroll WHERE reference_month = $1", [monthStr]);
+        const payrollCost = Number(payrollRes.rows[0].payroll_cost);
         const report = {
             month: m,
             year: y,
@@ -163,6 +168,8 @@ financialRouter.get("/report", async (req, res) => {
             totalPending: Number(row.total_pending),
             paidCount: Number(row.paid_count),
             pendingCount: Number(row.pending_count),
+            payrollCost,
+            netResult: Number(row.total_received) - payrollCost,
         };
         if (format === "csv") {
             const list = await db.query(`SELECT i.id, s.name as student_name, i.due_date, i.amount, i.status, i.paid_at

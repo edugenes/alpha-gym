@@ -255,6 +255,7 @@ export async function ensureEmployeesTable() {
         ["birth_date", "TEXT"], ["phone", "TEXT"], ["email", "TEXT"], ["address", "TEXT"],
         ["admission_date", "TEXT"], ["termination_date", "TEXT"],
         ["employment_type", "TEXT"], ["work_schedule", "TEXT"],
+        ["salary", "REAL"],
     ];
     for (const [col, type] of empCols) {
         try {
@@ -262,6 +263,24 @@ export async function ensureEmployeesTable() {
         }
         catch { /* já existe */ }
     }
+}
+export async function ensurePayrollTable() {
+    await run(`
+    CREATE TABLE IF NOT EXISTS payroll (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+      reference_month TEXT NOT NULL,   -- YYYY-MM
+      base_salary REAL NOT NULL,
+      commission REAL DEFAULT 0,
+      bonus REAL DEFAULT 0,
+      deductions REAL DEFAULT 0,
+      total REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente', 'pago')),
+      paid_at TEXT,
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
 }
 export async function ensureEmployeeAttachmentsTable() {
     await run(`

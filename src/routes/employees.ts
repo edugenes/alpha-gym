@@ -5,6 +5,7 @@ import { getDb } from "../db/client.js";
 import {
   ensureEmployeesTable,
   ensureEmployeeAttachmentsTable,
+  ensurePayrollTable,
   ensureUsersTable,
   ensureEnrollmentsTable,
   ensurePlansTable,
@@ -25,8 +26,16 @@ interface EmployeeRow {
   phone: string | null; email: string | null; address: string | null;
   admission_date: string | null; termination_date: string | null;
   employment_type: string | null; work_schedule: string | null;
+  salary: number | null;
   commission_percent: number | null; monthly_goal: number | null;
   status: string; created_at: string; updated_at: string;
+}
+
+interface PayrollRow {
+  id: number; employee_id: number; reference_month: string;
+  base_salary: number; commission: number; bonus: number;
+  deductions: number; total: number; status: string;
+  paid_at: string | null; notes: string | null; created_at: string;
 }
 
 interface AttachRow { id: number; employee_id: number; type: string | null; url: string; file_name: string | null; created_at: string }
@@ -44,6 +53,7 @@ function rowToEmployee(r: EmployeeRow, includePrivate = false) {
     terminationDate: r.termination_date,
     employmentType: r.employment_type,
     workSchedule: r.work_schedule,
+    salary: r.salary,
     commissionPercent: r.commission_percent,
     monthlyGoal: r.monthly_goal,
     status: r.status,
@@ -52,6 +62,15 @@ function rowToEmployee(r: EmployeeRow, includePrivate = false) {
   };
   if (!includePrivate) return base;
   return { ...base, cpf: r.cpf, rg: r.rg, birthDate: r.birth_date, address: r.address };
+}
+
+function rowToPayroll(r: PayrollRow) {
+  return {
+    id: r.id, employeeId: r.employee_id, referenceMonth: r.reference_month,
+    baseSalary: r.base_salary, commission: r.commission, bonus: r.bonus,
+    deductions: r.deductions, total: r.total, status: r.status,
+    paidAt: r.paid_at, notes: r.notes, createdAt: r.created_at,
+  };
 }
 
 // ── GET /api/employees ────────────────────────────────────────────────────────
@@ -143,7 +162,7 @@ employeesRouter.post("/", onlyAdmin, async (req, res) => {
       name: string; role: string; roleType?: string; customRole?: string;
       cpf?: string; rg?: string; birthDate?: string; phone?: string; email?: string; address?: string;
       admissionDate?: string; terminationDate?: string; employmentType?: string; workSchedule?: string;
-      commissionPercent?: number; monthlyGoal?: number; status?: string;
+      salary?: number; commissionPercent?: number; monthlyGoal?: number; status?: string;
       createLogin?: boolean; loginEmail?: string; loginRole?: string;
     };
 
@@ -162,8 +181,8 @@ employeesRouter.post("/", onlyAdmin, async (req, res) => {
       `INSERT INTO employees
         (name, role, role_type, custom_role, cpf, rg, birth_date, phone, email, address,
          admission_date, termination_date, employment_type, work_schedule,
-         commission_percent, monthly_goal, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+         salary, commission_percent, monthly_goal, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
       [
         body.name.trim(), body.role.trim(),
         body.roleType ?? null, body.customRole ?? null,
@@ -171,7 +190,7 @@ employeesRouter.post("/", onlyAdmin, async (req, res) => {
         body.phone ?? null, body.email ?? null, body.address ?? null,
         body.admissionDate ?? null, body.terminationDate ?? null,
         body.employmentType ?? null, body.workSchedule ?? null,
-        body.commissionPercent ?? null, body.monthlyGoal ?? null,
+        body.salary ?? null, body.commissionPercent ?? null, body.monthlyGoal ?? null,
         status,
       ]
     );
@@ -219,7 +238,7 @@ employeesRouter.put("/:id(\\d+)", onlyAdmin, async (req, res) => {
       name?: string; role?: string; roleType?: string; customRole?: string;
       cpf?: string; rg?: string; birthDate?: string; phone?: string; email?: string; address?: string;
       admissionDate?: string; terminationDate?: string; employmentType?: string; workSchedule?: string;
-      commissionPercent?: number; monthlyGoal?: number; status?: string;
+      salary?: number; commissionPercent?: number; monthlyGoal?: number; status?: string;
       createLogin?: boolean; loginEmail?: string; loginRole?: string;
     };
 
@@ -238,9 +257,10 @@ employeesRouter.put("/:id(\\d+)", onlyAdmin, async (req, res) => {
       `UPDATE employees SET
         name=$1, role=$2, role_type=$3, custom_role=$4, cpf=$5, rg=$6, birth_date=$7,
         phone=$8, email=$9, address=$10, admission_date=$11, termination_date=$12,
-        employment_type=$13, work_schedule=$14, commission_percent=$15, monthly_goal=$16,
-        status=$17, updated_at=datetime('now')
-       WHERE id=$18`,
+        employment_type=$13, work_schedule=$14, salary=$15,
+        commission_percent=$16, monthly_goal=$17,
+        status=$18, updated_at=datetime('now')
+       WHERE id=$19`,
       [
         body.name?.trim() ?? row.name,
         body.role?.trim() ?? row.role,
@@ -256,6 +276,7 @@ employeesRouter.put("/:id(\\d+)", onlyAdmin, async (req, res) => {
         body.terminationDate ?? row.termination_date,
         body.employmentType ?? row.employment_type,
         body.workSchedule ?? row.work_schedule,
+        body.salary !== undefined ? body.salary : row.salary,
         body.commissionPercent !== undefined ? body.commissionPercent : row.commission_percent,
         body.monthlyGoal !== undefined ? body.monthlyGoal : row.monthly_goal,
         newStatus,
@@ -357,6 +378,156 @@ employeesRouter.post("/:id/attachments", onlyAdmin, async (req, res) => {
   } catch (e) {
     console.error("Attachment create error:", e);
     res.status(500).json({ error: "Erro ao salvar anexo." });
+  }
+});
+
+// ── Folha de pagamento ─────────────────────────────────────────────────────────
+
+/** GET /api/employees/payroll?month=YYYY-MM — folha do mês (todos os funcionários ativos) */
+employeesRouter.get("/payroll", onlyAdmin, async (req, res) => {
+  try {
+    const month = (req.query.month as string) ?? new Date().toISOString().slice(0, 7);
+    await ensurePayrollTable();
+    await ensureEmployeesTable();
+    const db = getDb();
+
+    // Busca funcionários ativos com salário cadastrado
+    const empRes = await db.query(
+      "SELECT id, name, role, salary, commission_percent FROM employees WHERE status IN ('ativo','ferias') AND salary IS NOT NULL ORDER BY name",
+      []
+    );
+    const emps = empRes.rows as { id: number; name: string; role: string; salary: number; commission_percent: number | null }[];
+
+    // Para cada funcionário, busca ou calcula o registro da folha do mês
+    const result = await Promise.all(emps.map(async (emp) => {
+      // Verifica se já tem lançamento
+      const existing = await db.query(
+        "SELECT * FROM payroll WHERE employee_id = $1 AND reference_month = $2",
+        [emp.id, month]
+      );
+      if (existing.rows.length > 0) {
+        return { employee: { id: emp.id, name: emp.name, role: emp.role }, payroll: rowToPayroll(existing.rows[0] as PayrollRow) };
+      }
+
+      // Calcula comissão do mês
+      const salesRes = await db.query(
+        `SELECT COALESCE(SUM(p.price), 0) as total_sales
+         FROM enrollments e JOIN plans p ON p.id = e.plan_id
+         WHERE e.employee_id = $1 AND strftime('%Y-%m', e.created_at) = $2`,
+        [emp.id, month]
+      );
+      const totalSales = Number((salesRes.rows[0] as { total_sales: number }).total_sales);
+      const commission = emp.commission_percent ? Math.round(totalSales * (emp.commission_percent / 100) * 100) / 100 : 0;
+      const total = emp.salary + commission;
+
+      return {
+        employee: { id: emp.id, name: emp.name, role: emp.role },
+        payroll: {
+          id: null, employeeId: emp.id, referenceMonth: month,
+          baseSalary: emp.salary, commission, bonus: 0, deductions: 0, total,
+          status: "pendente", paidAt: null, notes: null, createdAt: null,
+        },
+      };
+    }));
+
+    // Totais da folha
+    const totalFolha = result.reduce((s, r) => s + r.payroll.total, 0);
+
+    res.json({ month, payroll: result, totalFolha: Math.round(totalFolha * 100) / 100 });
+  } catch (e) {
+    console.error("Payroll list error:", e);
+    res.status(500).json({ error: "Erro ao gerar folha." });
+  }
+});
+
+/** POST /api/employees/payroll — salvar/confirmar pagamento de um funcionário */
+employeesRouter.post("/payroll", onlyAdmin, async (req, res) => {
+  try {
+    const body = req.body as {
+      employeeId: number; referenceMonth: string;
+      baseSalary: number; commission?: number; bonus?: number; deductions?: number;
+      notes?: string;
+    };
+    if (!body.employeeId || !body.referenceMonth || body.baseSalary == null) {
+      return res.status(400).json({ error: "employeeId, referenceMonth e baseSalary são obrigatórios." });
+    }
+    await ensurePayrollTable();
+    const db = getDb();
+
+    const total = body.baseSalary + (body.commission ?? 0) + (body.bonus ?? 0) - (body.deductions ?? 0);
+
+    // UPSERT — um registro por funcionário por mês
+    const existing = await db.query(
+      "SELECT id FROM payroll WHERE employee_id = $1 AND reference_month = $2",
+      [body.employeeId, body.referenceMonth]
+    );
+
+    let row: PayrollRow;
+    if (existing.rows.length > 0) {
+      const r = await db.query(
+        `UPDATE payroll SET base_salary=$1, commission=$2, bonus=$3, deductions=$4, total=$5, notes=$6
+         WHERE employee_id=$7 AND reference_month=$8 RETURNING *`,
+        [body.baseSalary, body.commission ?? 0, body.bonus ?? 0, body.deductions ?? 0, total, body.notes ?? null, body.employeeId, body.referenceMonth]
+      );
+      row = r.rows[0] as PayrollRow;
+    } else {
+      const r = await db.query(
+        `INSERT INTO payroll (employee_id, reference_month, base_salary, commission, bonus, deductions, total, notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [body.employeeId, body.referenceMonth, body.baseSalary, body.commission ?? 0, body.bonus ?? 0, body.deductions ?? 0, total, body.notes ?? null]
+      );
+      row = r.rows[0] as PayrollRow;
+    }
+
+    res.status(201).json({ payroll: rowToPayroll(row) });
+  } catch (e) {
+    console.error("Payroll save error:", e);
+    res.status(500).json({ error: "Erro ao salvar folha." });
+  }
+});
+
+/** PATCH /api/employees/payroll/:id/pay — marcar como pago */
+employeesRouter.patch("/payroll/:id/pay", onlyAdmin, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    await ensurePayrollTable();
+    const db = getDb();
+    const result = await db.query(
+      "UPDATE payroll SET status='pago', paid_at=datetime('now') WHERE id=$1 RETURNING *",
+      [id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: "Registro não encontrado." });
+    res.json({ payroll: rowToPayroll(result.rows[0] as PayrollRow) });
+  } catch (e) {
+    console.error("Payroll pay error:", e);
+    res.status(500).json({ error: "Erro ao marcar pagamento." });
+  }
+});
+
+/** GET /api/employees/payroll/summary — custo total da folha por mês (para o dashboard financeiro) */
+employeesRouter.get("/payroll/summary", onlyAdmin, async (req, res) => {
+  try {
+    const months = parseInt((req.query.months as string) ?? "6", 10);
+    await ensurePayrollTable();
+    const db = getDb();
+    const result = await db.query(
+      `SELECT reference_month, SUM(total) as total_cost, COUNT(*) as employee_count
+       FROM payroll
+       GROUP BY reference_month
+       ORDER BY reference_month DESC
+       LIMIT $1`,
+      [months]
+    );
+    res.json({
+      summary: (result.rows as { reference_month: string; total_cost: number; employee_count: number }[]).map((r) => ({
+        month: r.reference_month,
+        totalCost: Math.round(Number(r.total_cost) * 100) / 100,
+        employeeCount: r.employee_count,
+      }))
+    });
+  } catch (e) {
+    console.error("Payroll summary error:", e);
+    res.status(500).json({ error: "Erro ao buscar resumo." });
   }
 });
 
